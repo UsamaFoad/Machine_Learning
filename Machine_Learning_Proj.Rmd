@@ -1,0 +1,273 @@
+---
+title: "Practical Machine Learning Assignment"
+author: "UsamaFoad"
+date: "May, 2016"
+output: 
+  html_document: 
+    keep_md: yes
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(cache=TRUE)
+```
+
+## Introduction..
+
+>"One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants."  
+
+So, as in the instructions part of the project, the goal was to predict the manner in which these 6 participants did the exercise. i.e., use any variables in the dataset to predict the 'classe' variable which include five different groups (A, B, C, D, E).  
+
+The training data for this project are available [here](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv) and the test data are available [here](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv). It is important to notice that this ***test*** data is test for the assignment itself! Such name can make a big confusion, so, from now onwards I'll call this data ***pml-testing***, and it will not be used until the very end of the project.
+
+###Exploring project dataset
+The dataset consists of 19622 observation of 160 variables. One hundred of this variables containing many missing values. I created a simple *for* loop to cycle throughout the dataset to detect these variables with NA as first value. All these non completed variables was dropped. The first seven variable of the remaining 60, are either names, serial numbers or time-data. Names and serial numbers are not needed in prediction so it was dropped. Although, the useful of time-data in the analysis, but it needs to be analysed as 'chunks' that can make the prediction model more complicated and processing consume. So, I dropped this data too to start from simplest model first. And as I get accuracy of 98% with the remaining variables I did not need to use this data.  
+The dataset was divided into three groups, training, testing and validation with ratio of 60:20:20, respectively.  
+```{r, warning=FALSE}
+# loading needed library
+library(knitr) 
+library(caret)
+library(corrplot)
+library(verification)
+library(randomForest)
+library(rpart)
+library(mlbench)
+library(rpart.plot)
+library(RColorBrewer)
+library(party)
+library(mvtnorm)
+library(modeltools)
+library(stats4)
+
+```
+
+```{r}
+# Load training and pml-testing dataset. N.B pml-testing is not testing for the model, it is
+# testing for the assignment. I'll not use pml-testing until the very end of the project.
+pml_testing <- read.csv("pml-testing.csv", na.strings=c("NA","")) 
+training_data <- read.csv("pml-training.csv", na.strings=c("NA",""))
+# part of the dataset showing the variables with NA
+kable(head(training_data[10:15]))
+# If the first cell of the column is NA I'll drop it, there are 100 column almost empty
+Not_Na_col_testing <- as.logical()
+for (i in 1:length(pml_testing)) {
+    if (!is.na(pml_testing[1,i])){
+        Not_Na_col_testing <- c(Not_Na_col_testing, TRUE)
+    }
+    else{
+        Not_Na_col_testing <- c(Not_Na_col_testing, FALSE)
+    }
+}
+
+Not_Na_col_training <- as.logical()
+for (i in 1:length(training_data)) {
+    if (!is.na(training_data[1,i])){
+        Not_Na_col_training <- c(Not_Na_col_training, TRUE)
+    }
+    else{
+        Not_Na_col_training <- c(Not_Na_col_training, FALSE)
+    }
+}
+
+# Make sure the empty columns is the same in both dataset
+summary(Not_Na_col_training == Not_Na_col_testing)
+
+# Keep only the real data columns
+pml_testing <- pml_testing[,Not_Na_col_testing]
+training_data<- training_data[,Not_Na_col_training]
+
+# Remove first 7 columns with time, names or time-data
+pml_testing <- pml_testing[,-c(1:7)]
+training_data<- training_data[,-c(1:7)]
+
+set.seed(1424)
+inTrain <- createDataPartition(training_data$classe, p=0.8, list=FALSE)
+training_and_test <- training_data[inTrain,]
+validation <- training_data[-inTrain,]
+set.seed(1424)
+# We need 60% from the original dataset so set p =0.75 (6/8*100)
+inTrainTwo <- createDataPartition(training_and_test$classe, p=0.75, list=FALSE)
+training <- training_and_test[inTrainTwo,]
+testing <- training_and_test[-inTrainTwo,]
+
+```
+
+#Model Creation (First Round)  
+
+At first I used [caret](https://cran.r-project.org/web/packages/caret/index.html) package to fit predictive cross validation model with random fores and conditional inference tree. Then I used those models on testing and validation dataset to predict the in- and out-sample errors and calculated the confusion matrix and its statistics.
+I tried to did some scaling and normalization for the dataset without improve on performance, so i dropped this part from the report and I used the data as it is without transformation.  
+
+Random forst **accuracy** was over 99% in both testing and validation dataset, with about 98% **sensitivity** and 99% **specificity**. Also, Kappa was 0.99. In the same time **No Information Rate** (*the proportion of classes that you would guess right if you randomly allocated them.*) was about 0.28. It is a great results, but still did not guarantee reasonable rate of out of sample error.
+Variable importance for the random forst showed that *roll_belt*, *pitch_belt*, *yaw_belt*, *pitch_forearm*, *magnet_dumbbell_z* and *magnet_dumbbell_y* were the top important variables across the classes.
+
+The best model accorss the conditional tree showed 91% accuracy with 0.89 Kappa. The confusion matrix showed that accuracy was about 88% with 0.85 Kappa. Sensitivity ranged from 81% to 94% between different classes, while specificity was ranging between 95% and 97%. 
+The following code show these models
+
+```{r}
+start_Time <- Sys.time()
+set.seed(1424)
+train_control<-trainControl(method="cv", number=6, allowParallel=TRUE,savePredictions = TRUE, verboseIter=FALSE)
+
+set.seed(1424)
+RandomForestFit<-train(classe~.,data=training, method="rf", trControl=train_control, importance=TRUE)
+
+predRandomForest_t<-predict(RandomForestFit, newdata=testing)
+confusionMatrix(predRandomForest_t, testing$classe)
+
+predRandomForest_v<-predict(RandomForestFit, newdata=validation)
+confusionMatrix(predRandomForest_v, validation$classe)
+end_Time <- Sys.time()
+
+round(end_Time - start_Time,2)
+
+varImp(RandomForestFit)
+
+```
+
+```{r}
+start_Time <- Sys.time()
+set.seed(1424)
+
+train <- createFolds(training$classe, k=10)
+
+ctreeFit <- train(classe ~ ., method = "ctree", data = training,
+                  tuneLength = 5,
+                  trControl = trainControl(
+                      method = "cv", indexOut = train))
+ctreeFit
+predCtree_t<-predict(ctreeFit, newdata=testing)
+confusionMatrix(predCtree_t, testing$classe)
+predCtree_v<-predict(ctreeFit, newdata=validation)
+confusionMatrix(predCtree_v, validation$classe)
+end_Time <- Sys.time()
+
+round(end_Time - start_Time,2)
+
+```
+
+```{r,fig.align='center',fig.height=6,fig.width=7}
+varImpPlot(RandomForestFit$finalModel, main = "Importance of variables in the Model", 
+           pch=19, col="blue",cex=0.75, sort=TRUE, type=1,n.var=45)
+
+```
+
+#Model Creation (Second Round)  
+To avoid [Multicollinearity](https://en.wikipedia.org/wiki/Multicollinearity) problems the correlation was tested among variables and highly correlated variables ( >= 0.9) was removed. That did not suppose to improve the predictive power or reliability much (if at all!) but it improve calculation regarding  individual predictors and, hopefully, reduce out of sample errors.
+
+The correlation matrix was calculated and the highly correlated variables (with correlation >= 0.9) was removed. Seven variables was highly correlated. The correlation matrix was plot before and after removing highly correlated variables. 
+(N.B. some variables lock like it have highly correlation ex. magnet_belt_x and pitch_belt, in fact the correlation between these two variable is -0.882 and that less than the cut off criteria)  
+Random forest and conditional inference tree were repeated on training dataset after removing the highly correlated variables. The results showed slightly improvement in accuracy, sensitivity, specificity and time to generate the model.
+
+The following code shows these results.
+
+```{r,fig.align='center',fig.height=8,fig.width=9}
+# calculate correlation matrix
+correlationMatrix <- cor(training[,1:52])
+
+# Find highly correlated variables >= 0.9
+highlyCorrelatedNames <- findCorrelation(correlationMatrix, cutoff=0.9, names = TRUE)
+
+# print highly correlated variable names
+print(highlyCorrelatedNames)
+
+# Calculate % of higlly correlated variables
+round(length(highlyCorrelatedNames)/52*100, 2)
+
+
+```
+
+```{r,fig.align='right',fig.height=8,fig.width=9}
+
+corrplot(correlationMatrix, method = "circle", type="lower",  title = "Correlation Matrix Before removing highly correated variables", mar = c(0, 0, 4, 0),tl.cex = 0.75, order="hclust", hclust.method = "complete", tl.col="black", tl.srt = 45)
+```
+
+```{r}
+
+training <-  training[,!names(training) %in% highlyCorrelatedNames]
+testing <- testing[,!names(testing) %in% highlyCorrelatedNames]
+validation <- validation[,!names(testing) %in% highlyCorrelatedNames]
+# calculate correlation matrix
+correlationMatrix <- cor(training[,1:45])
+
+# Find highly correlated variables >= 0.9
+highlyCorrelatedNames <- findCorrelation(correlationMatrix, cutoff=0.9, names = TRUE)
+
+# print highly correlated variable names
+print(highlyCorrelatedNames)
+
+# Calculate % of higlly correlated variables
+round(length(highlyCorrelatedNames)/45*100, 2)
+
+```
+
+```{r,fig.align='right',fig.height=8,fig.width=9}
+
+corrplot(correlationMatrix, method = "circle", type="lower",  title = "Correlation Matrix After removing highly correated variables", mar = c(0, 0, 4, 0),tl.cex = 0.75, order="hclust", hclust.method = "complete", tl.col="black", tl.srt = 45)
+```
+
+```{r}
+start_Time <- Sys.time()
+set.seed(1424)
+train_control<-trainControl(method="cv", number=6, allowParallel=TRUE,savePredictions = TRUE, verboseIter=FALSE)
+
+set.seed(1424)
+RandomForestFit<-train(classe~.,data=training, method="rf", trControl=train_control, importance=TRUE)
+
+predRandomForest_t<-predict(RandomForestFit, newdata=testing)
+confusionMatrix(predRandomForest_t, testing$classe)
+
+predRandomForest_v<-predict(RandomForestFit, newdata=validation)
+confusionMatrix(predRandomForest_v, validation$classe)
+end_Time <- Sys.time()
+
+round(end_Time - start_Time,2)
+
+varImp(RandomForestFit)
+
+```
+
+```{r}
+start_Time <- Sys.time()
+set.seed(1424)
+
+train <- createFolds(training$classe, k=10)
+
+ctreeFit <- train(classe ~ ., method = "ctree", data = training,
+                  tuneLength = 5,
+                  trControl = trainControl(
+                      method = "cv", indexOut = train))
+ctreeFit
+
+predCtree_t<-predict(ctreeFit, newdata=testing)
+confusionMatrix(predCtree_t, testing$classe)
+predCtree_v<-predict(ctreeFit, newdata=validation)
+confusionMatrix(predCtree_v, validation$classe)
+end_Time <- Sys.time()
+
+round(end_Time - start_Time,2)
+
+```
+
+```{r,fig.align='center',fig.height=6,fig.width=7}
+varImpPlot(RandomForestFit$finalModel, main = "Importance of variables in the Model", 
+           pch=19, col="blue",cex=0.75, sort=TRUE, type=1,n.var=45)
+```
+
+# Conclusion and Final Model selection
+Random forest showed better results than conditional tree. Also, removing highly correlated variables improve the model slightly. So, that model was selected as the final model. In sample error is less than 1%, while the out of sample error is more difficult to estimate as the validation and testing dataset did not show big diffrence. The final model was applied on pml-testing data set and the results were supmited to Course Project Prediction. From the results showed by auto grader out of sample error estimated to be less than 1%.
+
+```{r}
+predict(RandomForestFit, newdata=pml_testing)
+sessionInfo()
+```
+#References  
+
+[Building Predictive Models in R Using the caret Package](https://www.jstatsoft.org/article/view/v028i05/v28i05.pdf)
+
+[Caret documentation](http://cran.r-project.org/web/packages/caret/caret.pdf)
+
+[Model Training and Tuning](http://topepo.github.io/caret/training.html)
+
+[Multicollinearity](https://en.wikipedia.org/wiki/Multicollinearity)
+
+[Random Forests](https://www.stat.berkeley.edu/~breiman/RandomForests/cc_home.htm)
+
